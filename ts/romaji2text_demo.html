@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Romaji2Text — ASR Streaming Demo</title>
+<style>
+  :root {
+    --bg: #0a0a14; --bg2: #141428; --bg3: #1e1e3a;
+    --fg: #e0e0f0; --fg-dim: #6a6a8a; --border: #2a2a4a;
+    --green: #5ac86e; --blue: #5a96ff; --yellow: #ffc34b; --red: #ff5a5a;
+    --accent: #5b8cff; --hover: #30446c;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Meiryo UI', 'Yu Gothic', 'Segoe UI', sans-serif;
+    background: var(--bg); color: var(--fg);
+    display: flex; justify-content: center; padding: 20px 16px;
+    min-height: 100vh;
+  }
+  .container { max-width: 800px; width: 100%; }
+  h1 { font-size: 20px; margin-bottom: 2px; }
+  .subtitle { color: var(--fg-dim); font-size: 12px; margin-bottom: 16px; }
+
+  /* ── Stats bar ──────────────────────────────────────────── */
+  .stats {
+    display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px;
+    font-size: 12px; color: var(--fg-dim);
+  }
+  .stat-item { background: var(--bg2); padding: 4px 10px; border-radius: 4px; border: 1px solid var(--border); }
+  .stat-item span { color: var(--fg); font-weight: bold; }
+
+  /* ── Display area (ASR-style) ─────────────────────────── */
+  .display {
+    background: var(--bg2); border: 1px solid var(--border); border-radius: 8px;
+    padding: 20px; min-height: 120px; font-size: 22px; line-height: 1.8;
+    position: relative; margin-bottom: 12px;
+  }
+  .display .committed { color: var(--fg); }
+  .display .converting { color: var(--accent); }
+  .display .cursor {
+    display: inline-block; width: 2px; height: 1.2em;
+    background: var(--accent); vertical-align: text-bottom;
+    animation: blink 1s step-end infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* ── Preview line ──────────────────────────────────────── */
+  .preview-line {
+    background: var(--bg3); border: 1px solid var(--border); border-radius: 6px;
+    padding: 10px 14px; font-size: 14px; margin-bottom: 12px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .preview-text { color: var(--fg); }
+  .preview-label { color: var(--fg-dim); font-size: 11px; margin-right: 8px; }
+
+  /* ── Raw buffer ───────────────────────────────────────── */
+  .raw-bar {
+    background: var(--bg2); border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px 14px; font-size: 13px; margin-bottom: 12px;
+    font-family: 'Consolas', 'Fira Code', monospace;
+    color: var(--yellow);
+    display: flex; justify-content: space-between;
+  }
+  .raw-bar .label { color: var(--fg-dim); font-size: 11px; }
+
+  /* ── Event log ────────────────────────────────────────── */
+  .log {
+    background: #080812; border: 1px solid var(--border); border-radius: 6px;
+    padding: 10px; max-height: 200px; overflow-y: auto;
+    font-size: 11px; font-family: 'Consolas', 'Fira Code', monospace;
+    margin-bottom: 12px;
+  }
+  .log-entry { padding: 2px 0; border-bottom: 1px solid #12122a; }
+  .log-entry .type { font-weight: bold; }
+  .log-entry .type.input     { color: var(--fg-dim); }
+  .log-entry .type.converted { color: var(--accent); }
+  .log-entry .type.confirmed { color: var(--green); }
+  .log-entry .type.correction { color: var(--yellow); }
+
+  /* ── Controls ─────────────────────────────────────────── */
+  .controls { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+  button {
+    background: var(--accent); color: #fff; border: none; border-radius: 6px;
+    padding: 8px 16px; font-size: 13px; cursor: pointer; font-family: inherit;
+  }
+  button:hover { opacity: .85; }
+  button.green { background: var(--green); color: #000; }
+  button.yellow { background: var(--yellow); color: #000; }
+  button.red { background: var(--red); color: #fff; }
+  button.secondary { background: var(--hover); }
+
+  /* ── Preset buttons ───────────────────────────────────── */
+  .presets { margin-bottom: 12px; }
+  .presets .label { font-size: 12px; color: var(--fg-dim); margin-bottom: 6px; }
+  .presets span {
+    display: inline-block; background: var(--bg3); border: 1px solid var(--border);
+    border-radius: 4px; padding: 4px 10px; margin: 3px 4px 0 0; font-size: 12px;
+    cursor: pointer; color: var(--fg-dim); font-family: 'Consolas', monospace;
+  }
+  .presets span:hover { color: var(--fg); border-color: var(--accent); }
+
+  /* ── Settings ─────────────────────────────────────────── */
+  .settings {
+    background: var(--bg2); border: 1px solid var(--border); border-radius: 6px;
+    padding: 12px; margin-bottom: 12px; display: none;
+  }
+  .settings.visible { display: block; }
+  .settings label { display: block; font-size: 12px; color: var(--fg-dim); margin-bottom: 4px; }
+  .settings input[type=number] {
+    background: var(--bg3); border: 1px solid var(--border); color: var(--fg);
+    padding: 4px 8px; border-radius: 4px; width: 80px; font-size: 13px;
+  }
+  .settings input[type=text] {
+    background: var(--bg3); border: 1px solid var(--border); color: var(--fg);
+    padding: 4px 8px; border-radius: 4px; width: 200px; font-size: 13px;
+  }
+
+  /* ── Typing area (hidden input for keyboard capture) ── */
+  .type-zone {
+    background: var(--bg3); border: 2px dashed var(--border); border-radius: 8px;
+    padding: 30px; text-align: center; margin-bottom: 12px;
+    cursor: text; transition: border-color .2s;
+  }
+  .type-zone.active { border-color: var(--accent); }
+  .type-zone .hint { color: var(--fg-dim); font-size: 14px; }
+  .type-zone .hint kbd {
+    background: var(--bg2); border: 1px solid var(--border); border-radius: 3px;
+    padding: 2px 6px; font-size: 12px; color: var(--fg);
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Romaji2Text — ASR Streaming Engine</h1>
+  <p class="subtitle">Type romaji → auto-convert after debounce → Space to flush → Enter to commit</p>
+
+  <!-- Stats -->
+  <div class="stats">
+    <div class="stat-item">Events: <span id="evCount">0</span></div>
+    <div class="stat-item">Chars typed: <span id="charCount">0</span></div>
+    <div class="stat-item">Confidence: <span id="confValue">—</span></div>
+    <div class="stat-item">Debounce: <span id="debounceVal">350ms</span></div>
+  </div>
+
+  <!-- Main display (ASR style) -->
+  <div class="display" id="display">
+    <span class="committed" id="committedText"></span><span class="converting" id="convertingText"></span><span class="cursor"></span>
+  </div>
+
+  <!-- Preview -->
+  <div class="preview-line">
+    <span><span class="preview-label">PREVIEW</span><span class="preview-text" id="previewText">—</span></span>
+  </div>
+
+  <!-- Raw buffer -->
+  <div class="raw-bar">
+    <span id="rawBuffer">—</span>
+    <span class="label">RAW BUFFER</span>
+  </div>
+
+  <!-- Typing zone -->
+  <div class="type-zone" id="typeZone">
+    <div class="hint">Click here and start typing romaji · <kbd>Space</kbd> flush · <kbd>Enter</kbd> commit · <kbd>Esc</kbd> reset · <kbd>⌫</kbd> delete</div>
+  </div>
+
+  <!-- Presets (type them character by character) -->
+  <div class="presets">
+    <div class="label">Auto-type presets (watch the streaming conversion):</div>
+    <span onclick="autoType('kikai gakushuu')">kikai gakushuu</span>
+    <span onclick="autoType('deproi')">deproi</span>
+    <span onclick="autoType('sya')">sya (fuzzy→sha)</span>
+    <span onclick="autoType('ai imes')">ai imes</span>
+    <span onclick="autoType('toukyou')">toukyou</span>
+    <span onclick="autoType('tsukutte')">tsukutte</span>
+    <span onclick="autoType('hello world')">hello world (en)</span>
+  </div>
+
+  <!-- Controls -->
+  <div class="controls">
+    <button class="green" onclick="engine.commit(); updateDisplay(engine.commit())">⏎ Commit</button>
+    <button class="yellow" onclick="engine.flush(); updateDisplay(engine.flush())">␣ Flush</button>
+    <button class="red" onclick="engine.reset(); resetDisplay()">↺ Reset</button>
+    <button class="secondary" onclick="toggleSettings()">⚙ Settings</button>
+    <button class="secondary" onclick="clearLog()">Clear Log</button>
+  </div>
+
+  <!-- Settings -->
+  <div class="settings" id="settings">
+    <label>Debounce (ms): <input type="number" id="debounceInput" value="350" min="100" max="2000" onchange="setDebounce()"></label>
+    <label>Add dict entry: <input type="text" id="addDictInput" placeholder="e.g. ぼくのなまえ"> <button onclick="addDict()" style="margin-left:8px">Add</button></label>
+  </div>
+
+  <!-- Event log -->
+  <div class="log" id="logBox"></div>
+</div>
+
+<!-- Inline the Romaji2Text engine (TypeScript compiled to JS) -->
+<script>
+// ── Romaji2Text Engine (inlined from romaji2text.ts) ─────────────────────────
+const TABLE = [
+  ["sha","しゃ"],["shi","し"],["shu","しゅ"],["she","しぇ"],["sho","しょ"],
+  ["chi","ち"],["tchi","っち"],["cha","ちゃ"],["chu","ちゅ"],["che","ちぇ"],["cho","ちょ"],
+  ["tsu","つ"],["ttsu","っつ"],["dzu","づ"],["dji","ぢ"],
+  ["kya","きゃ"],["kyu","きゅ"],["kyo","きょ"],
+  ["gya","ぎゃ"],["gyu","ぎゅ"],["gyo","ぎょ"],
+  ["sya","しゃ"],["syu","しゅ"],["syo","しょ"],
+  ["zya","じゃ"],["zyu","じゅ"],["zyo","じょ"],
+  ["jya","じゃ"],["jyu","じゅ"],["jyo","じょ"],
+  ["ja","じゃ"],["ji","じ"],["ju","じゅ"],["je","じぇ"],["jo","じょ"],
+  ["tya","ちゃ"],["tyu","ちゅ"],["tyo","ちょ"],
+  ["nya","にゃ"],["nyu","にゅ"],["nyo","にょ"],
+  ["hya","ひゃ"],["hyu","ひゅ"],["hyo","ひょ"],
+  ["mya","みゃ"],["myu","みゅ"],["myo","みょ"],
+  ["rya","りゃ"],["ryu","りゅ"],["ryo","りょ"],
+  ["bya","びゃ"],["byu","びゅ"],["byo","びょ"],
+  ["pya","ぴゃ"],["pyu","ぴゅ"],["pyo","ぴょ"],
+  ["dya","ぢゃ"],["dyu","ぢゅ"],["dyo","ぢょ"],
+  ["fa","ふぁ"],["fi","ふぃ"],["fu","ふ"],["fe","ふぇ"],["fo","ふぉ"],
+  ["va","ゔぁ"],["vi","ゔぃ"],["vu","ゔ"],["ve","ゔぇ"],["vo","ゔぉ"],
+  ["thi","てぃ"],["tha","てゃ"],["thu","てゅ"],["tho","てょ"],
+  ["dhi","でぃ"],["dha","でゃ"],["dhu","でゅ"],["dho","でょ"],
+  ["ka","か"],["ki","き"],["ku","く"],["ke","け"],["ko","こ"],
+  ["ga","が"],["gi","ぎ"],["gu","ぐ"],["ge","げ"],["go","ご"],
+  ["sa","さ"],["si","し"],["su","す"],["se","せ"],["so","そ"],
+  ["za","ざ"],["zi","じ"],["zu","ず"],["ze","ぜ"],["zo","ぞ"],
+  ["ta","た"],["ti","ち"],["tu","つ"],["te","て"],["to","と"],
+  ["da","だ"],["di","ぢ"],["du","づ"],["de","で"],["do","ど"],
+  ["na","な"],["ni","に"],["nu","ぬ"],["ne","ね"],["no","の"],
+  ["ha","は"],["hi","ひ"],["hu","ふ"],["he","へ"],["ho","ほ"],
+  ["ba","ば"],["bi","び"],["bu","ぶ"],["be","べ"],["bo","ぼ"],
+  ["pa","ぱ"],["pi","ぴ"],["pu","ぷ"],["pe","ぺ"],["po","ぽ"],
+  ["ma","ま"],["mi","み"],["mu","む"],["me","め"],["mo","も"],
+  ["ya","や"],["yu","ゆ"],["yo","よ"],
+  ["ra","ら"],["ri","り"],["ru","る"],["re","れ"],["ro","ろ"],
+  ["wa","わ"],["wi","うぃ"],["we","うぇ"],["wo","を"],
+  ["la","ら"],["li","り"],["lu","る"],["le","れ"],["lo","ろ"],
+  ["a","あ"],["i","い"],["u","う"],["e","え"],["o","お"],
+  ["xa","ぁ"],["xi","ぃ"],["xu","ぅ"],["xe","ぇ"],["xo","ぉ"],
+  ["xtu","っ"],["xtsu","っ"],["xya","ゃ"],["xyu","ゅ"],["xyo","ょ"],
+  ["ltu","っ"],["ltsu","っ"],
+];
+const VOWELS_Y = new Set("aeiouy");
+const FUZZY_MAP = { chii:"chi",tssu:"ttsu",sya:"sha",syu:"shu",syo:"sho",zya:"ja",zyu:"ju",zyo:"jo",tya:"cha",tyu:"chu",tyo:"cho",whi:"wi",v:"b" };
+const BUILTIN = new Set(["じんこうちのう","きかいがくしゅう","せいせいえーあい","えーあい","くらうど","さーばー","でーたべーす","あぴー","ふれーむわーく","らいぶらりー","りあくと","ぱいそん","でぷろい","りぽじとり","こみっと","えーじぇんと","あーきてくちゃ","でざいんぱたーん","りふぁくたりんぐ","ぱいぷらいん","どっかー","くばねてす","せきゅりてぃ","とーくん","ふろんとえんど","ばっくえんど","すけーらびりてぃ","よんで","つんどく","こんみゃく","ちかとし","きんし","きんしねっと","はっこうぶんめい","ねんきん","ねんきんこんぴゅーた","らくご","でぃすとぴあ","えすえふ","とうきょう","にほん","かいしゃ","しごと","かいぎ","しりょう","ほうこく","れんらく","けんとう","かくにん","じょうほう","でーた","しすてむ","うぇぶ","あぷり","かいとう","しつもん","ないよう","せかい","じかん","にゅうりょく","しゅつりょく","へんかん","せってい"]);
+
+class Romaji2Text {
+  buffer = []; committed = ""; dict = new Set(BUILTIN);
+  debounceMs = 350; debounceTimer = null;
+  evCount = 0; charCount = 0;
+
+  on(event, cb) { if (!this._listeners) this._listeners = {}; (this._listeners[event] ||= []).push(cb); }
+  emit(ev) { this.evCount++; (this._listeners?.[ev.type]||[]).forEach(c => c(ev)); (this._listeners?.['*']||[]).forEach(c => c(ev)); }
+
+  onKey(ch) {
+    if (ch === " ") { const ev = this.flush(); this.buffer.push(" "); this.scheduleDebounce(); return ev; }
+    if (ch === "\b" || ch === "\x7f") { this.buffer.pop(); this.resetDebounce(); return this.makeEvent("input"); }
+    if (ch === "\r" || ch === "\n") { this.stopDebounce(); return this.commit(); }
+    const lo = ch.toLowerCase();
+    if (lo >= "a" && lo <= "z") { if (this.buffer.length < 500) { this.buffer.push(lo); this.charCount++; this.scheduleDebounce(); } }
+    return this.makeEvent("input");
+  }
+
+  scheduleDebounce() { this.stopDebounce(); this.debounceTimer = setTimeout(() => { if (this.buffer.length > 0) { const ev = this.flush(); this.emit(ev); } this.debounceTimer = null; }, this.debounceMs); }
+  resetDebounce() { this.stopDebounce(); if (this.buffer.length > 0) this.scheduleDebounce(); }
+  stopDebounce() { if (this.debounceTimer) { clearTimeout(this.debounceTimer); this.debounceTimer = null; } }
+
+  flush() {
+    if (!this.buffer.length) return { type:"input", raw:"", text:this.committed, confidence:0, suggestion:null };
+    const raw = this.buffer.join("");
+    const tokens = raw.split(/\s+/).filter(Boolean);
+    let converted = "", totalConf = 0, suggestion = null;
+    for (const tok of tokens) {
+      let fixed = FUZZY_MAP[tok] ?? tok;
+      if (suggestion === null && fixed !== tok) suggestion = `'${tok}' → '${fixed}'`;
+      if (this.dict.has(fixed)) { converted += fixed; totalConf += 95; continue; }
+      const prefix = [...this.dict].find(k => k.startsWith(fixed) && k !== fixed);
+      if (prefix) { converted += prefix; totalConf += 60; continue; }
+      const hira = this.convertToken(fixed);
+      converted += hira;
+      const tc = hira !== fixed ? 75 : 25; totalConf += tc;
+      if (tc < 50 && suggestion === null) suggestion = `未登録: '${fixed}' → '${hira}'`;
+    }
+    const conf = tokens.length ? Math.round(totalConf / tokens.length) : 0;
+    return { type:"converted", raw, text: converted, confidence: conf, suggestion };
+  }
+
+  commit() { const ev = this.flush(); this.committed += ev.text; this.buffer = []; return { type:"confirmed", raw:"", text: this.committed, confidence: ev.confidence, suggestion: null }; }
+  preview() {
+    if (!this.buffer.length) return this.committed;
+    const raw = this.buffer.join("");
+    const tokens = raw.split(/\s+/).filter(Boolean);
+    let out = this.committed;
+    for (const tok of tokens) {
+      const fixed = FUZZY_MAP[tok] ?? tok;
+      if (this.dict.has(fixed)) { out += fixed; continue; }
+      const prefix = [...this.dict].find(k => k.startsWith(fixed) && k !== fixed);
+      if (prefix) { out += prefix; continue; }
+      out += this.convertToken(fixed);
+    }
+    return out;
+  }
+  addDict(yomi) { this.dict.add(yomi); }
+  reset() { this.buffer = []; this.committed = ""; this.charCount = 0; this.stopDebounce(); }
+
+  convertToken(src) {
+    src = src.toLowerCase(); let out = "", i = 0;
+    while (i < src.length) {
+      if (i+1 < src.length && src[i] !== "n" && src[i] === src[i+1] && !"aeiou".includes(src[i])) { out += "っ"; i++; continue; }
+      if (src[i] === "n" && (i+1 >= src.length || !VOWELS_Y.has(src[i+1]))) { out += "ん"; i++; continue; }
+      let matched = false;
+      for (const [r,h] of TABLE) { if (src.length-i >= r.length && src.substring(i, i+r.length) === r) { out += h; i += r.length; matched = true; break; } }
+      if (!matched) { out += src[i]; i++; }
+    }
+    return out;
+  }
+
+  makeEvent(type) { return { type, raw: this.buffer.join(""), text: this.preview(), confidence: 0, suggestion: null }; }
+}
+
+// ── UI Glue ──────────────────────────────────────────────────────────────────
+const engine = new Romaji2Text();
+const typeZone = document.getElementById("typeZone");
+const display = document.getElementById("display");
+let typingActive = false;
+
+typeZone.addEventListener("click", () => { typeZone.classList.add("active"); typingActive = true; });
+
+document.addEventListener("keydown", (e) => {
+  if (!typingActive) return;
+  if (e.key === "Escape") { engine.reset(); resetDisplay(); return; }
+  if (["Control","Shift","Alt","Meta","CapsLock","Tab"].includes(e.key)) return;
+  e.preventDefault();
+  const ev = engine.onKey(e.key);
+  updateDisplay(ev);
+});
+
+let eventCounter = 0;
+engine.on("*", (ev) => {
+  eventCounter++;
+  document.getElementById("evCount").textContent = eventCounter;
+  document.getElementById("charCount").textContent = engine.charCount;
+  document.getElementById("confValue").textContent = ev.confidence || "—";
+  addLog(ev);
+});
+
+function updateDisplay(ev) {
+  document.getElementById("committedText").textContent = engine.committed;
+  document.getElementById("rawBuffer").textContent = engine.buffer.length ? engine.buffer.join("") : "—";
+  document.getElementById("previewText").textContent = engine.preview() || "—";
+
+  if (ev.type === "converted" || ev.type === "input") {
+    document.getElementById("convertingText").textContent = ev.text || "";
+  }
+  if (ev.type === "confirmed") {
+    document.getElementById("convertingText").textContent = "";
+  }
+}
+
+function resetDisplay() {
+  document.getElementById("committedText").textContent = "";
+  document.getElementById("convertingText").textContent = "";
+  document.getElementById("rawBuffer").textContent = "—";
+  document.getElementById("previewText").textContent = "—";
+  document.getElementById("confValue").textContent = "—";
+  document.getElementById("evCount").textContent = "0";
+  document.getElementById("charCount").textContent = "0";
+  eventCounter = 0;
+  clearLog();
+}
+
+function addLog(ev) {
+  const box = document.getElementById("logBox");
+  const entry = document.createElement("div");
+  entry.className = "log-entry";
+  const sugStr = ev.suggestion ? ` | 💡 ${ev.suggestion}` : "";
+  entry.innerHTML = `<span class="type ${ev.type}">[${ev.type}]</span> raw="${esc(ev.raw)}" → "${esc(ev.text)}" conf=${ev.confidence}${sugStr}`;
+  box.prepend(entry);
+  if (box.children.length > 200) box.removeChild(box.lastChild);
+}
+function esc(s) { return (s||"").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+function clearLog() { document.getElementById("logBox").innerHTML = ""; }
+
+function toggleSettings() { document.getElementById("settings").classList.toggle("visible"); }
+function setDebounce() {
+  const v = parseInt(document.getElementById("debounceInput").value) || 350;
+  engine.debounceMs = v;
+  document.getElementById("debounceVal").textContent = v + "ms";
+}
+function addDict() {
+  const v = document.getElementById("addDictInput").value.trim();
+  if (v) { engine.addDict(v); document.getElementById("addDictInput").value = ""; }
+}
+
+// ── Auto-type preset (character by character, like real typing) ──────────────
+let autoTyping = false;
+function autoType(text) {
+  if (autoTyping) return;
+  autoTyping = true;
+  typeZone.classList.add("active");
+  typingActive = true;
+  let i = 0;
+  const delay = 120; // ms per character
+  function typeNext() {
+    if (i >= text.length) { autoTyping = false; return; }
+    const ev = engine.onKey(text[i]);
+    updateDisplay(ev);
+    i++;
+    setTimeout(typeNext, delay);
+  }
+  typeNext();
+}
+</script>
+</body>
+</html>
